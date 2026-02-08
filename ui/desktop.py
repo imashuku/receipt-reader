@@ -201,10 +201,21 @@ def render_desktop(use_cloud: bool):
                 st.rerun()
 
     # CSV Download
-    csv_data = generate_csv_data(records)
+    csv_result = generate_csv_data(records)
+    valid_rows = csv_result.get("valid", [])
+    
+    if valid_rows:
+        import io
+        df_csv = pd.DataFrame(valid_rows)
+        # CSV文字列生成
+        csv_str = df_csv.to_csv(index=False)
+        csv_bytes = csv_str.encode("utf-8-sig")
+    else:
+        csv_bytes = b""
+
     st.download_button(
         "📥 CSVダウンロード (Freee形式)",
-        data=csv_data.encode("utf-8-sig"),
+        data=csv_bytes,
         file_name="receipts.csv",
         mime="text/csv"
     )
