@@ -46,7 +46,15 @@ USE_CLOUD_BACKEND = os.environ.get("USE_CLOUD_BACKEND", "false").lower() == "tru
 
 # ─────────────────────────────────────────────
 # Step 3: logicモジュールのインポート（環境変数セットアップ済み）
+#   Streamlit Cloudではst.rerun()時にPythonのインポートキャッシュが壊れ、
+#   KeyError: 'logic.xxx' が発生するため、毎回キャッシュをリセットする
 # ─────────────────────────────────────────────
+import importlib
+importlib.invalidate_caches()
+for _k in list(sys.modules.keys()):
+    if _k.startswith("logic"):
+        del sys.modules[_k]
+
 try:
     from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
     from logic.exporter import generate_csv_data, revalidate_record
