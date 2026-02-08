@@ -6,6 +6,7 @@ class TaxRate(str, Enum):
     RATE_10 = "10%"
     RATE_8 = "8%"
     RATE_8_REDUCED = "8%_reduced"
+    EXEMPT = "exempt"
     UNKNOWN = "unknown"
 
 class PaymentMethod(str, Enum):
@@ -46,5 +47,19 @@ class ReceiptRecord(BaseModel):
     needs_review: bool = Field(True, description="要確認フラグ")
     missing_fields: List[str] = Field(default_factory=list, description="不足項目のリスト")
     segment_id: Optional[str] = Field(None, description="画像分割ID")
+    region: Optional[List[int]] = Field(None, description="[ymin, xmin, ymax, xmax] 0-1000正規化座標")
     
-    # User Confirmation (CSV export relies on these implying 'confirmed' state if needs_review is False)
+    # Merge Info
+    merge_candidates: List[dict] = Field(default_factory=list, description="マージされた元レコードの簡易情報")
+    merge_reason: str = Field("", description="マージの根拠 (例: 'Fuzzy Match: Vendor')")
+    group_id: str = Field("", description="デバッグ用グループID")
+    
+    
+    # User Confirmation
+    # User Confirmation
+    is_confirmed: bool = Field(False, description="ユーザー確認完了フラグ")
+    is_discarded: bool = Field(False, description="ゴミ箱/削除フラグ (Trueなら一覧から除外)")
+    
+    # System Info
+    backend_used: str = Field("", description="使用されたAIモデル (gemini-2.0-flash / gpt-4o 等)")
+    image_path: str = Field("", description="ソース画像ファイル名 (input/images内)")

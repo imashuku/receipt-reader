@@ -1,6 +1,28 @@
+# Python
 __pycache__/
+*.py[cod]
+*.pyc
 .venv/
 .env
+
+# Output & Data
 output/
-*.pyc
+
+# Input (keep folder structure only)
+input/inbox/*
+input/done/*
+input/failed/*
+!input/inbox/.gitkeep
+!input/done/.gitkeep
+!input/failed/.gitkeep
+
+# Logs
+*.log
+streamlit_debug.log
+
+# OS
 .DS_Store
+
+# IDE
+.idea/
+.vscode/

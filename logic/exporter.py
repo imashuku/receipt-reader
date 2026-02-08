@@ -43,8 +43,10 @@ TAX_RATE_MAP = {
     TaxRate.RATE_10: "4",       # 10%
     TaxRate.RATE_8: "3",        # 8%
     TaxRate.RATE_8_REDUCED: "5",# 8%軽減
+    TaxRate.EXEMPT: "0",        # 非課税
     TaxRate.UNKNOWN: "0"        # 不明/対象外
 }
+TAX_CLASS_EXEMPT = "0" # 非課税 (仮)
 
 def validate_mandatory_fields(row: Dict[str, str]) -> List[str]:
     """
@@ -79,9 +81,10 @@ def convert_record_to_row(record: ReceiptRecord) -> Dict[str, str]:
     # 日付処理
     try:
         # YYYY/MM/DD -> YYYYMM 形式
-        dt_parts = record.date.split("/")
-        if len(dt_parts) == 3:
-            internal_month = dt_parts[0] + dt_parts[1]  # 例: 202602
+        # 少し堅牢にする (スラッシュ除去して6桁)
+        clean_date = record.date.replace("/", "").replace("-", "")
+        if len(clean_date) >= 6:
+            internal_month = clean_date[:6]
         else:
             internal_month = ""
     except:
@@ -104,7 +107,7 @@ def convert_record_to_row(record: ReceiptRecord) -> Dict[str, str]:
         
         "借方勘定科目コード": debit_code,
         "借方金額": str(record.total_amount),
-        "借方消費税区分": TAX_CLASS_PURCHASE, # [2] 仕入
+        "借方消費税区分": TAX_CLASS_EXEMPT if record.tax_rate_detected == TaxRate.EXEMPT else TAX_CLASS_PURCHASE,
         "借方税込/税抜区分": TAX_INC_EXC_INC, # [1] 税込
         "借方税率コード": tax_rate_code,
         
@@ -129,9 +132,10 @@ def generate_csv_data(records: List[ReceiptRecord]) -> Dict[str, List[Dict]]:
     invalid_rows = []
     
     for record in records:
-        # ユーザー確認済みでないレコードはスキップするか、バリデーションで弾くか
-        # 要件：「1つでも欠ける場合...CSV出力対象から除外」
-        
+        # ユーザー要件: ユーザー確認済みでないレコードはCSV出力対象から除外 (必須)
+        if not record.is_confirmed:
+            continue
+
         row = convert_record_to_row(record)
         missing = validate_mandatory_fields(row)
         
@@ -140,7 +144,7 @@ def generate_csv_data(records: List[ReceiptRecord]) -> Dict[str, List[Dict]]:
             record.missing_fields = missing # モデル側にも情報を戻す（表示用）
             invalid_info = row.copy()
             invalid_info["_error_reasons"] = missing
-            invalid_info["_original_record"] = record
+            # invalid_info["_original_record"] = record # JSON serialize error回避のため除外またはstr化推奨
             invalid_rows.append(invalid_info)
         else:
             # 正常
@@ -150,3 +154,33 @@ def generate_csv_data(records: List[ReceiptRecord]) -> Dict[str, List[Dict]]:
         "valid": valid_rows,
         "invalid": invalid_rows
     }
+
+
+def revalidate_record(record: ReceiptRecord) -> ReceiptRecord:
+    """
+    レコードの valid/invalid を再判定する（UI保存時に使用）。
+    - category/payment_method が UNKNOWN なら自動補完
+    - CSV行変換 → 必須項目チェック → needs_review / missing_fields 更新
+    - invoice_candidate のみの場合は needs_review を立てる
+    """
+    # 自動補完: category
+    if record.category == Category.UNKNOWN:
+        record.category = Category.OTHER
+    # 自動補完: payment_method
+    if record.payment_method == PaymentMethod.UNKNOWN:
+        record.payment_method = PaymentMethod.CASH
+
+    # CSV行変換 → 必須項目チェック
+    row = convert_record_to_row(record)
+    missing = validate_mandatory_fields(row)
+
+    # T番号関連
+    if record.invoice_candidate and not record.invoice_no_norm:
+        if "invoice_no_candidate" not in missing:
+            missing.append("invoice_no_candidate")
+
+    # needs_review: 不足項目があるか、T番号候補が未確定なら True
+    record.missing_fields = missing
+    record.needs_review = len(missing) > 0
+
+    return record

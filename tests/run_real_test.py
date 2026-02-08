@@ -54,7 +54,7 @@ class Logger:
         self.f.close()
 
 
-def process_single_image(image_path: str):
+def process_single_image(image_path: str, use_split: bool = False):
     """1枚の画像に対してE2Eパイプラインを実行しログを残す"""
     filename = os.path.basename(image_path)
     stem = os.path.splitext(filename)[0]
@@ -74,11 +74,19 @@ def process_single_image(image_path: str):
     logger.log("")
     logger.log("[Step 1] OCR実行中...")
     try:
-        records = analyze_receipt_image(image_path)
+        records = analyze_receipt_image(image_path, use_split_scan=use_split)
     except Exception as e:
         logger.log(f"[FATAL] OCR実行エラー: {type(e).__name__}: {e}")
         logger.close()
         return {"file": filename, "status": "ERROR", "error": str(e)}
+
+    # マージログ出力
+    if hasattr(records, "logs") and records.logs:
+        logger.log("")
+        logger.log("── マージログ ──")
+        for l in records.logs:
+            logger.log(f"  {l}")
+        logger.log("────────────────")
 
     if not records:
         logger.log("[WARN] レシートが1件も抽出されませんでした")
@@ -198,6 +206,11 @@ def process_single_image(image_path: str):
 def main():
     """メインエントリーポイント"""
     # 引数チェック
+    use_split = "--split" in sys.argv
+    if use_split:
+        sys.argv.remove("--split")
+        print("[INFO] Split Scan Mode: ON")
+
     if len(sys.argv) > 1:
         # 特定ファイル名が指定された場合
         target_files = []
@@ -229,7 +242,7 @@ def main():
 
     results = []
     for path in target_files:
-        summary = process_single_image(path)
+        summary = process_single_image(path, use_split=use_split)
         results.append(summary)
         print()  # 画像間のスペース
 
