@@ -553,23 +553,45 @@ def render_mobile_mode():
                 uid = str(uuid.uuid4())[:8]
                 fname = f"{ts}_{uid}{ext}"
                 
-                # Ensure Inbox Exists
-                INPUT_DIR.mkdir(parents=True, exist_ok=True)
-                
-                save_path = INPUT_DIR / fname
-                with open(save_path, "wb") as f:
-                    f.write(file_bytes)
-                
-                # Convert HEIC
-                _convert_heic_to_jpg(save_path)
+                if USE_CLOUD_BACKEND:
+                    # クラウドモード: R2のinboxフォルダにアップロード
+                    from logic.storage import upload_image_bytes as r2_upload
+                    object_key = f"inbox/{fname}"
+                    # R2に直接アップロード
+                    from logic.storage import get_r2_client, R2_BUCKET_NAME
+                    client = get_r2_client()
+                    content_type = "image/jpeg"
+                    if ext in [".png"]:
+                        content_type = "image/png"
+                    elif ext in [".heic", ".heif"]:
+                        content_type = "image/heic"
+                    client.put_object(
+                        Bucket=R2_BUCKET_NAME,
+                        Key=object_key,
+                        Body=file_bytes,
+                        ContentType=content_type
+                    )
+                else:
+                    # ローカルモード: ファイルに保存
+                    INPUT_DIR.mkdir(parents=True, exist_ok=True)
+                    save_path = INPUT_DIR / fname
+                    with open(save_path, "wb") as f:
+                        f.write(file_bytes)
+                    # Convert HEIC
+                    _convert_heic_to_jpg(save_path)
                 count += 1
             st.success(f"✅ {count}枚の画像を送信しました！\nPC側で解析を行ってください。")
             
     # Inbox Status (Read-only)
-    inbox_files = sorted([
-        f for f in INPUT_DIR.glob("*")
-        if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".heic", ".heif"}
-    ])
+    if USE_CLOUD_BACKEND:
+        # クラウドモード: R2のinboxから件数取得
+        from logic.storage import list_images
+        inbox_files = list_images("inbox/")
+    else:
+        inbox_files = sorted([
+            f for f in INPUT_DIR.glob("*")
+            if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".heic", ".heif"}
+        ])
     if inbox_files:
         st.divider()
         st.caption(f"現在のInbox: {len(inbox_files)} 枚の未処理画像が待機中")
@@ -669,10 +691,16 @@ with st.sidebar:
         st.rerun()
     
     # Inbox counter (PC awareness)
-    inbox_count = len([
-        f for f in INPUT_DIR.glob("*")
-        if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".heic", ".heif"}
-    ])
+    if USE_CLOUD_BACKEND:
+        # クラウドモード: R2のinboxから件数取得
+        from logic.storage import list_images
+        inbox_count = len(list_images("inbox/"))
+    else:
+        # ローカルモード
+        inbox_count = len([
+            f for f in INPUT_DIR.glob("*")
+            if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".heic", ".heif"}
+        ])
     if inbox_count > 0:
         st.warning(f"📥 **未処理 Inbox: {inbox_count}枚**")
         if st.button("🔄 更新"):
@@ -770,10 +798,16 @@ with st.sidebar:
 # ─────────────────────────────────────────────
 
 # 1. 新規解析の提案 (Inboxにファイルがある場合のみ)
-inbox_files = sorted([
-    f.name for f in INPUT_DIR.glob("*") 
-    if f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".heic"}
-])
+if USE_CLOUD_BACKEND:
+    # クラウドモード: R2のinboxからファイル一覧取得
+    from logic.storage import list_images, download_image, delete_image as r2_delete
+    inbox_files = list_images("inbox/")
+else:
+    # ローカルモード: ローカルフォルダから取得
+    inbox_files = sorted([
+        f.name for f in INPUT_DIR.glob("*") 
+        if f.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".heic"}
+    ])
 
 if inbox_files:
     # 目立つように表示
@@ -807,35 +841,55 @@ if inbox_files:
                     total_files = len(inbox_files)
                     progress_bar = status_container.progress(0)
                     
-                    for idx, filename in enumerate(inbox_files):
-                        status_container.write(f"Processing {idx+1}/{total_files}: {filename} ...")
-                        img_path = INPUT_DIR / filename
-                        
-                        # Analyze
-                        # Use split_scan=False for speed in batch, or True if needed. 
-                        # Defaulting to False as requested for stability.
-                        recs = analyze_receipt_image(str(img_path), use_split_scan=False)
-                        
+                    for idx, file_item in enumerate(inbox_files):
                         if USE_CLOUD_BACKEND:
-                            # クラウドモード: 画像をR2にアップロード
-                            try:
-                                with open(img_path, "rb") as f:
-                                    img_data = f.read()
-                                object_key = upload_image_bytes(img_data, filename)
-                                image_url = get_presigned_url(object_key)
-                                
-                                for r in recs:
-                                    r.image_path = image_url
-                                    r._cloud_image_key = object_key  # R2オブジェクトキーを保存
-                                
-                                # Inboxから削除（R2にアップロード済み）
-                                img_path.unlink()
-                                
-                            except Exception as upload_err:
-                                st.warning(f"画像アップロード失敗 {filename}: {upload_err}")
-                                for r in recs:
-                                    r.image_path = str(img_path)
+                            # クラウドモード: R2からダウンロードして解析
+                            object_key = file_item  # R2のオブジェクトキー（inbox/filename.jpg）
+                            filename = object_key.split("/")[-1]  # ファイル名部分
+                            status_container.write(f"Processing {idx+1}/{total_files}: {filename} ...")
+                            
+                            # R2から画像をダウンロード
+                            img_data = download_image(object_key)
+                            
+                            # 一時ファイルに保存して解析
+                            import tempfile
+                            with tempfile.NamedTemporaryFile(suffix=Path(filename).suffix, delete=False) as tmp:
+                                tmp.write(img_data)
+                                tmp_path = tmp.name
+                            
+                            # Analyze
+                            recs = analyze_receipt_image(tmp_path, use_split_scan=False)
+                            
+                            # R2のimagesフォルダに移動（inbox→images）
+                            new_object_key = f"images/{filename}"
+                            from logic.storage import get_r2_client, R2_BUCKET_NAME
+                            client = get_r2_client()
+                            client.put_object(
+                                Bucket=R2_BUCKET_NAME,
+                                Key=new_object_key,
+                                Body=img_data,
+                                ContentType="image/jpeg"
+                            )
+                            image_url = get_presigned_url(new_object_key)
+                            
+                            for r in recs:
+                                r.image_path = image_url
+                                r._cloud_image_key = new_object_key
+                            
+                            # inboxから削除
+                            r2_delete(object_key)
+                            
+                            # 一時ファイル削除
+                            os.unlink(tmp_path)
                         else:
+                            # ローカルモード: 従来の処理
+                            filename = file_item
+                            status_container.write(f"Processing {idx+1}/{total_files}: {filename} ...")
+                            img_path = INPUT_DIR / filename
+                            
+                            # Analyze
+                            recs = analyze_receipt_image(str(img_path), use_split_scan=False)
+                        
                             # ローカルモード: Move to done
                             try:
                                 import shutil
