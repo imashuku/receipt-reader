@@ -558,7 +558,7 @@ def render_mobile_mode():
                     from logic.storage import upload_image_bytes as r2_upload
                     object_key = f"inbox/{fname}"
                     # R2に直接アップロード
-                    from logic.storage import get_r2_client, R2_BUCKET_NAME
+                    from logic.storage import get_r2_client, get_bucket_name
                     client = get_r2_client()
                     content_type = "image/jpeg"
                     if ext in [".png"]:
@@ -566,7 +566,7 @@ def render_mobile_mode():
                     elif ext in [".heic", ".heif"]:
                         content_type = "image/heic"
                     client.put_object(
-                        Bucket=R2_BUCKET_NAME,
+                        Bucket=get_bucket_name(),
                         Key=object_key,
                         Body=file_bytes,
                         ContentType=content_type
@@ -862,10 +862,10 @@ if inbox_files:
                             
                             # R2のimagesフォルダに移動（inbox→images）
                             new_object_key = f"images/{filename}"
-                            from logic.storage import get_r2_client, R2_BUCKET_NAME
+                            from logic.storage import get_r2_client, get_bucket_name
                             client = get_r2_client()
                             client.put_object(
-                                Bucket=R2_BUCKET_NAME,
+                                Bucket=get_bucket_name(),
                                 Key=new_object_key,
                                 Body=img_data,
                                 ContentType="image/jpeg"

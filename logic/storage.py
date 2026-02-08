@@ -15,8 +15,8 @@ load_dotenv()
 # Streamlit Cloud対応: st.secretsとos.getenvの両方をサポート
 def _get_secret(key: str, default: str = None) -> str:
     """Streamlit Cloud (st.secrets) またはローカル (os.getenv) から値を取得"""
-    # まずos.getenvを試す
-    value = os.getenv(key, default)
+    # まずos.getenvを試す（ローカル開発用）
+    value = os.getenv(key)
     if value:
         return value
     
@@ -30,25 +30,35 @@ def _get_secret(key: str, default: str = None) -> str:
     
     return default
 
-# R2接続設定
-R2_ACCOUNT_ID = _get_secret("R2_ACCOUNT_ID")
-R2_ACCESS_KEY_ID = _get_secret("R2_ACCESS_KEY_ID")
-R2_SECRET_ACCESS_KEY = _get_secret("R2_SECRET_ACCESS_KEY")
-R2_BUCKET_NAME = _get_secret("R2_BUCKET_NAME", "receipt-reader")
+# R2設定を取得する関数（遅延評価でStreamlit Cloud対応）
+def _get_r2_config():
+    """R2設定を取得（毎回呼び出し時に評価）"""
+    account_id = _get_secret("R2_ACCOUNT_ID")
+    access_key = _get_secret("R2_ACCESS_KEY_ID")
+    secret_key = _get_secret("R2_SECRET_ACCESS_KEY")
+    bucket_name = _get_secret("R2_BUCKET_NAME", "receipt-reader")
+    endpoint = f"https://{account_id}.r2.cloudflarestorage.com" if account_id else None
+    return account_id, access_key, secret_key, bucket_name, endpoint
 
-# R2エンドポイント
-R2_ENDPOINT = f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com" if R2_ACCOUNT_ID else None
+def get_bucket_name():
+    """バケット名を取得（遅延評価）"""
+    return _get_secret("R2_BUCKET_NAME", "receipt-reader")
+
+# 後方互換性のため（実際は get_bucket_name() を使うこと）
+R2_BUCKET_NAME = "receipt-reader"  # デフォルト値。実行時は get_bucket_name() で取得
 
 def get_r2_client():
     """R2クライアントを取得"""
-    if not all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY]):
-        raise ValueError("R2 credentials not set in environment variables")
+    account_id, access_key, secret_key, bucket_name, endpoint = _get_r2_config()
+    
+    if not all([account_id, access_key, secret_key]):
+        raise ValueError("R2 credentials not set. Check st.secrets or environment variables.")
     
     return boto3.client(
         "s3",
-        endpoint_url=R2_ENDPOINT,
-        aws_access_key_id=R2_ACCESS_KEY_ID,
-        aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+        endpoint_url=endpoint,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
         config=Config(signature_version="s3v4"),
         region_name="auto"
     )
@@ -82,7 +92,7 @@ def upload_image(file_path: str, object_key: Optional[str] = None) -> str:
     
     with open(file_path, "rb") as f:
         client.put_object(
-            Bucket=R2_BUCKET_NAME,
+            Bucket=get_bucket_name(),
             Key=object_key,
             Body=f,
             ContentType=content_type
@@ -114,7 +124,7 @@ def upload_image_bytes(data: bytes, filename: str) -> str:
         content_type = "image/heic"
     
     client.put_object(
-        Bucket=R2_BUCKET_NAME,
+        Bucket=get_bucket_name(),
         Key=object_key,
         Body=data,
         ContentType=content_type
@@ -138,7 +148,7 @@ def get_presigned_url(object_key: str, expires_in: int = 3600) -> str:
     
     url = client.generate_presigned_url(
         "get_object",
-        Params={"Bucket": R2_BUCKET_NAME, "Key": object_key},
+        Params={"Bucket": get_bucket_name(), "Key": object_key},
         ExpiresIn=expires_in
     )
     
@@ -158,7 +168,7 @@ def download_image(object_key: str) -> bytes:
     client = get_r2_client()
     
     response = client.get_object(
-        Bucket=R2_BUCKET_NAME,
+        Bucket=get_bucket_name(),
         Key=object_key
     )
     
@@ -175,7 +185,7 @@ def delete_image(object_key: str):
     client = get_r2_client()
     
     client.delete_object(
-        Bucket=R2_BUCKET_NAME,
+        Bucket=get_bucket_name(),
         Key=object_key
     )
 
@@ -193,7 +203,7 @@ def list_images(prefix: str = "images/") -> list[str]:
     client = get_r2_client()
     
     response = client.list_objects_v2(
-        Bucket=R2_BUCKET_NAME,
+        Bucket=get_bucket_name(),
         Prefix=prefix
     )
     
