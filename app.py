@@ -54,8 +54,12 @@ except Exception:
 USE_CLOUD_BACKEND = os.environ.get("USE_CLOUD_BACKEND", "false").lower() == "true"
 
 if USE_CLOUD_BACKEND:
-    from logic import data_layer
-    from logic.storage import upload_image_bytes, get_presigned_url
+    try:
+        from logic import data_layer
+        from logic.storage import upload_image_bytes, get_presigned_url
+    except Exception as _cloud_err:
+        st.warning(f"⚠️ クラウドバックエンド初期化失敗（ローカルモードで動作）: {_cloud_err}")
+        USE_CLOUD_BACKEND = False
 
 # ─────────────────────────────────────────────
 # 定数
