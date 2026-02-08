@@ -7,17 +7,49 @@ import streamlit as st
 import streamlit.components.v1 as components
 import json
 import os
+import sys
 import base64
 import glob
 import pandas as pd
 from pathlib import Path
-from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
-from logic.exporter import generate_csv_data, revalidate_record
-from logic.gemini_client import analyze_receipt_image, rescan_specific_area
 from datetime import datetime
 import subprocess
 import socket
 import shutil
+import importlib
+
+# Streamlit Cloud対応: sys.pathにプロジェクトルートを追加
+_project_root = str(Path(__file__).resolve().parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+# Streamlit Cloudではモジュールキャッシュが壊れることがある
+# KeyErrorが発生した場合はキャッシュをクリアしてリトライ
+def _safe_import():
+    """logicモジュールを安全にインポート"""
+    try:
+        from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
+        from logic.exporter import generate_csv_data, revalidate_record
+        from logic.gemini_client import analyze_receipt_image, rescan_specific_area
+        return True
+    except (KeyError, ModuleNotFoundError) as e:
+        # モジュールキャッシュをクリアしてリトライ
+        for key in list(sys.modules.keys()):
+            if key.startswith("logic"):
+                del sys.modules[key]
+        try:
+            from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
+            from logic.exporter import generate_csv_data, revalidate_record
+            from logic.gemini_client import analyze_receipt_image, rescan_specific_area
+            return True
+        except Exception as e2:
+            st.error(f"❌ モジュール読み込みエラー: {e2}")
+            return False
+
+_safe_import()
+from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
+from logic.exporter import generate_csv_data, revalidate_record
+from logic.gemini_client import analyze_receipt_image, rescan_specific_area
 import uuid
 from dotenv import load_dotenv
 
@@ -947,8 +979,10 @@ if inbox_files:
                     st.rerun()
                     
                 except Exception as e:
+                    import traceback
                     status_container.update(label="エラー発生", state="error")
                     st.error(f"解析エラー: {e}")
+                    st.code(traceback.format_exc(), language="text")
 
         with col_info:
              st.caption(f"対象ファイル: {inbox_files[0]} 他")
