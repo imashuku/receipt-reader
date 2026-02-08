@@ -187,24 +187,62 @@ def render_desktop(use_cloud: bool):
             new_amount = st.number_input("合計金額", value=rec.total_amount)
             new_subject = st.text_input("但し書き・メモ", value=rec.subject)
             
+            # Translation Maps
+            CAT_MAP = {
+                Category.TRAVEL: "旅費交通費",
+                Category.PARKING: "駐車場",
+                Category.TOLL: "高速・通行料",
+                Category.MEETING: "会議費",
+                Category.ENTERTAINMENT: "交際費",
+                Category.SUPPLIES: "消耗品費",
+                Category.DUES: "諸会費",
+                Category.OTHER: "その他",
+                Category.UNKNOWN: "未設定"
+            }
+            PAY_MAP = {
+                PaymentMethod.CASH: "現金",
+                PaymentMethod.PAYPAY: "PayPay",
+                PaymentMethod.CREDIT: "クレジットカード",
+                PaymentMethod.UNKNOWN: "不明"
+            }
+            TAX_MAP = {
+                TaxRate.RATE_10: "10%",
+                TaxRate.RATE_8: "8%",
+                TaxRate.RATE_8_REDUCED: "8% (軽減)",
+                TaxRate.EXEMPT: "免税",
+                TaxRate.UNKNOWN: "不明"
+            }
+
             # Enum Selectors
             # Category
-            cat_options = [c.value for c in Category]
-            current_cat = rec.category.value if rec.category else Category.UNKNOWN.value
-            if current_cat not in cat_options: current_cat = Category.UNKNOWN.value
-            new_cat_val = st.selectbox("経費区分", options=cat_options, index=cat_options.index(current_cat))
+            cat_options = list(Category)
+            current_cat = rec.category if rec.category in cat_options else Category.UNKNOWN
+            new_cat = st.selectbox(
+                "経費区分", 
+                options=cat_options, 
+                index=cat_options.index(current_cat),
+                format_func=lambda x: CAT_MAP.get(x, x.value)
+            )
             
             # Payment
-            pay_options = [p.value for p in PaymentMethod]
-            current_pay = rec.payment_method.value if rec.payment_method else PaymentMethod.UNKNOWN.value
-            if current_pay not in pay_options: current_pay = PaymentMethod.UNKNOWN.value
-            new_pay_val = st.selectbox("支払方法", options=pay_options, index=pay_options.index(current_pay))
+            pay_options = list(PaymentMethod)
+            current_pay = rec.payment_method if rec.payment_method in pay_options else PaymentMethod.UNKNOWN
+            new_pay = st.selectbox(
+                "支払方法", 
+                options=pay_options, 
+                index=pay_options.index(current_pay),
+                format_func=lambda x: PAY_MAP.get(x, x.value)
+            )
             
             # Tax
-            tax_options = [t.value for t in TaxRate]
-            current_tax = rec.tax_rate_detected.value if rec.tax_rate_detected else TaxRate.UNKNOWN.value
-            if current_tax not in tax_options: current_tax = TaxRate.UNKNOWN.value
-            new_tax_val = st.selectbox("税区分", options=tax_options, index=tax_options.index(current_tax))
+            tax_options = list(TaxRate)
+            current_tax = rec.tax_rate_detected if rec.tax_rate_detected in tax_options else TaxRate.UNKNOWN
+            new_tax = st.selectbox(
+                "税区分", 
+                options=tax_options, 
+                index=tax_options.index(current_tax),
+                format_func=lambda x: TAX_MAP.get(x, x.value)
+            )
             
             # Invoice
             new_invoice = st.text_input("インボイス番号 (T+13桁)", value=rec.invoice_no_norm)
@@ -217,9 +255,9 @@ def render_desktop(use_cloud: bool):
                 rec.vendor = new_vendor
                 rec.total_amount = int(new_amount)
                 rec.subject = new_subject
-                rec.category = Category(new_cat_val)
-                rec.payment_method = PaymentMethod(new_pay_val)
-                rec.tax_rate_detected = TaxRate(new_tax_val)
+                rec.category = new_cat
+                rec.payment_method = new_pay
+                rec.tax_rate_detected = new_tax
                 rec.invoice_no_norm = new_invoice
                 
                 # 確認フラグ更新
