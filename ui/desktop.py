@@ -185,11 +185,51 @@ def render_desktop(use_cloud: bool):
             new_date = st.text_input("日付 (YYYY-MM-DD)", value=rec.date)
             new_vendor = st.text_input("店名", value=rec.vendor)
             new_amount = st.number_input("合計金額", value=rec.total_amount)
+            new_subject = st.text_input("但し書き・メモ", value=rec.subject)
+            
+            # Enum Selectors
+            # Category
+            cat_options = [c.value for c in Category]
+            current_cat = rec.category.value if rec.category else Category.UNKNOWN.value
+            if current_cat not in cat_options: current_cat = Category.UNKNOWN.value
+            new_cat_val = st.selectbox("経費区分", options=cat_options, index=cat_options.index(current_cat))
+            
+            # Payment
+            pay_options = [p.value for p in PaymentMethod]
+            current_pay = rec.payment_method.value if rec.payment_method else PaymentMethod.UNKNOWN.value
+            if current_pay not in pay_options: current_pay = PaymentMethod.UNKNOWN.value
+            new_pay_val = st.selectbox("支払方法", options=pay_options, index=pay_options.index(current_pay))
+            
+            # Tax
+            tax_options = [t.value for t in TaxRate]
+            current_tax = rec.tax_rate_detected.value if rec.tax_rate_detected else TaxRate.UNKNOWN.value
+            if current_tax not in tax_options: current_tax = TaxRate.UNKNOWN.value
+            new_tax_val = st.selectbox("税区分", options=tax_options, index=tax_options.index(current_tax))
+            
+            # Invoice
+            new_invoice = st.text_input("インボイス番号 (T+13桁)", value=rec.invoice_no_norm)
+            
+            st.divider()
+            is_confirmed = st.checkbox("✅ 確認完了とする", value=rec.is_confirmed)
             
             if st.form_submit_button("💾 保存"):
                 rec.date = new_date
                 rec.vendor = new_vendor
-                rec.total_amount = new_amount
+                rec.total_amount = int(new_amount)
+                rec.subject = new_subject
+                rec.category = Category(new_cat_val)
+                rec.payment_method = PaymentMethod(new_pay_val)
+                rec.tax_rate_detected = TaxRate(new_tax_val)
+                rec.invoice_no_norm = new_invoice
+                
+                # 確認フラグ更新
+                rec.is_confirmed = is_confirmed
+                if is_confirmed:
+                    rec.needs_review = False
+                    # missing_fieldsもクリアする? (最低限必須項目が埋まっているかはチェックすべきだがここでは簡易的に)
+                    if "invoice_no_candidate" in rec.missing_fields:
+                        rec.missing_fields.remove("invoice_no_candidate")
+
                 # Save
                 session_manager.save_records(
                     st.session_state.summary_path,
