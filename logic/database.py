@@ -12,9 +12,27 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Streamlit Cloud対応: st.secretsとos.getenvの両方をサポート
+def _get_secret(key: str, default: str = "") -> str:
+    """Streamlit Cloud (st.secrets) またはローカル (os.getenv) から値を取得"""
+    # まずos.getenvを試す
+    value = os.getenv(key, "")
+    if value:
+        return value
+    
+    # Streamlit Cloudの場合はst.secretsを試す
+    try:
+        import streamlit as st
+        if hasattr(st, 'secrets') and key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    
+    return default
+
 # Turso接続設定
-TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL", "")
-TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
+TURSO_DATABASE_URL = _get_secret("TURSO_DATABASE_URL")
+TURSO_AUTH_TOKEN = _get_secret("TURSO_AUTH_TOKEN")
 
 # libsql:// を https:// に変換
 if TURSO_DATABASE_URL.startswith("libsql://"):

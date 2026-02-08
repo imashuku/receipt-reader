@@ -12,14 +12,32 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Streamlit Cloud対応: st.secretsとos.getenvの両方をサポート
+def _get_secret(key: str, default: str = None) -> str:
+    """Streamlit Cloud (st.secrets) またはローカル (os.getenv) から値を取得"""
+    # まずos.getenvを試す
+    value = os.getenv(key, default)
+    if value:
+        return value
+    
+    # Streamlit Cloudの場合はst.secretsを試す
+    try:
+        import streamlit as st
+        if hasattr(st, 'secrets') and key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    
+    return default
+
 # R2接続設定
-R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID")
-R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
-R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
-R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "receipt-reader")
+R2_ACCOUNT_ID = _get_secret("R2_ACCOUNT_ID")
+R2_ACCESS_KEY_ID = _get_secret("R2_ACCESS_KEY_ID")
+R2_SECRET_ACCESS_KEY = _get_secret("R2_SECRET_ACCESS_KEY")
+R2_BUCKET_NAME = _get_secret("R2_BUCKET_NAME", "receipt-reader")
 
 # R2エンドポイント
-R2_ENDPOINT = f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+R2_ENDPOINT = f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com" if R2_ACCOUNT_ID else None
 
 def get_r2_client():
     """R2クライアントを取得"""
