@@ -352,8 +352,9 @@ def _render_zoomable_image(img_path: str):
     - ダブルクリック: リセット（全体表示に戻す）
     - 拡大状態はマウスを離しても維持される
     - クラウドURL（https://）にも対応
+    - iPhone EXIF回転に自動対応
     """
-    from PIL import Image as PILImage
+    from PIL import Image as PILImage, ImageOps
     import io
     
     # URLの場合はrequestsで取得、ローカルファイルの場合は直接読み込み
@@ -363,34 +364,45 @@ def _render_zoomable_image(img_path: str):
             response = requests.get(img_path, timeout=10)
             response.raise_for_status()
             img_data = response.content
-            img_b64 = base64.b64encode(img_data).decode()
             
-            # MIMEタイプをContent-Typeから取得
-            content_type = response.headers.get("Content-Type", "image/png")
-            mime = content_type.split(";")[0].strip()
-            
-            # 画像サイズ取得
+            # EXIF回転を適用してからbase64化
             with PILImage.open(io.BytesIO(img_data)) as pil_img:
+                pil_img = ImageOps.exif_transpose(pil_img)
                 w, h = pil_img.size
                 display_h = min(int(600 * h / w), 760)
+                # 回転済み画像をbase64化
+                buf = io.BytesIO()
+                fmt = pil_img.format or "JPEG"
+                pil_img.save(buf, format=fmt)
+                img_b64 = base64.b64encode(buf.getvalue()).decode()
+            
+            # MIMEタイプ
+            content_type = response.headers.get("Content-Type", "image/jpeg")
+            mime = content_type.split(";")[0].strip()
         except Exception as e:
             st.error(f"画像の読み込みに失敗しました: {e}")
             return
     else:
-        # ローカルファイル
-        with open(img_path, "rb") as f:
-            img_b64 = base64.b64encode(f.read()).decode()
+        # ローカルファイル: EXIF回転を適用
+        try:
+            with PILImage.open(img_path) as pil_img:
+                pil_img = ImageOps.exif_transpose(pil_img)
+                w, h = pil_img.size
+                display_h = min(int(600 * h / w), 760)
+                # 回転済み画像をbase64化
+                buf = io.BytesIO()
+                fmt = pil_img.format or "JPEG"
+                pil_img.save(buf, format=fmt)
+                img_b64 = base64.b64encode(buf.getvalue()).decode()
+        except Exception:
+            # フォールバック: そのまま読み込み
+            with open(img_path, "rb") as f:
+                img_b64 = base64.b64encode(f.read()).decode()
+            display_h = 650
 
         ext = Path(img_path).suffix.lower().lstrip(".")
         mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-                "webp": "image/webp"}.get(ext, "image/png")
-        
-        try:
-            with PILImage.open(img_path) as pil_img:
-                w, h = pil_img.size
-                display_h = min(int(600 * h / w), 760)
-        except Exception:
-            display_h = 650
+                "webp": "image/webp"}.get(ext, "image/jpeg")
     
     data_url = f"data:{mime};base64,{img_b64}"
 
@@ -1293,58 +1305,57 @@ else:
     with col_img:
         target_img_path = None
         
-        # Candidates (Sort by Name)
-        candidates = sorted(list(DONE_DIR.glob("*")) + list(INPUT_DIR.glob("*")), key=lambda p: p.name)
-        candidate_names = [p.name for p in candidates if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".heic"}]
-        
-        # Determine initial index
-        # 1. Try existing record path (Extract filename from full path)
-        current_selection = rec.image_path
-        current_filename = Path(current_selection).name if current_selection else ""
-        
-        default_index = 0
-        
-        if current_filename and current_filename in candidate_names:
-            default_index = candidate_names.index(current_filename) + 1 # +1 for (Unselected)
+        # クラウドモード: image_pathがURLならそのまま表示
+        if USE_CLOUD_BACKEND and rec.image_path and (
+            rec.image_path.startswith("http://") or rec.image_path.startswith("https://")
+        ):
+            _render_zoomable_image(rec.image_path)
         else:
-            # 2. Heuristic: Match index (Only if no path match)
-            # CAUTION: This causes mismatch if records != files. 
-            # Better to default to 0 (Unselected) or try harder.
-            # But kept as fallback for raw uploads.
-            # However, with the batch fix, paths should be correct.
-            # If path is wrong, showing ANY image is dangerous. 
-            # Let's disable heuristic index matching to prevent "Wrong Image" confusion.
+            # ローカルモード: ファイル候補から選択
+            # Candidates (Sort by Name)
+            candidates = sorted(list(DONE_DIR.glob("*")) + list(INPUT_DIR.glob("*")), key=lambda p: p.name)
+            candidate_names = [p.name for p in candidates if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".heic"}]
+            
+            # Determine initial index
+            # 1. Try existing record path (Extract filename from full path)
+            current_selection = rec.image_path
+            current_filename = Path(current_selection).name if current_selection else ""
+            
             default_index = 0
-        
-        # Selectbox (Always visible)
-        selected_img = st.selectbox(
-            "画像ファイル (変更で即保存)", 
-            ["(未選択)"] + candidate_names, 
-            index=default_index, 
-            key=f"img_sel_{idx}"
-        )
-        
-        # Resolve Path
-        if selected_img != "(未選択)":
-            for p in candidates:
-                if p.name == selected_img:
-                    target_img_path = str(p)
-                    break
-        
-        # Auto-Save if changed (or if heuristic filled it in first time)
-        if selected_img != "(未選択)" and selected_img != rec.image_path:
-            rec.image_path = selected_img
-            st.session_state.records = records
-            _save_records(st.session_state.summary_path, records, st.session_state.original_data)
-            st.toast(f"画像を紐付けました: {selected_img}")
-            # rerunning might be annoying if it happens automatically, but necessary to sync state
-            st.rerun()
+            
+            if current_filename and current_filename in candidate_names:
+                default_index = candidate_names.index(current_filename) + 1 # +1 for (Unselected)
+            else:
+                default_index = 0
+            
+            # Selectbox (Always visible)
+            selected_img = st.selectbox(
+                "画像ファイル (変更で即保存)", 
+                ["(未選択)"] + candidate_names, 
+                index=default_index, 
+                key=f"img_sel_{idx}"
+            )
+            
+            # Resolve Path
+            if selected_img != "(未選択)":
+                for p in candidates:
+                    if p.name == selected_img:
+                        target_img_path = str(p)
+                        break
+            
+            # Auto-Save if changed
+            if selected_img != "(未選択)" and selected_img != rec.image_path:
+                rec.image_path = selected_img
+                st.session_state.records = records
+                _save_records(st.session_state.summary_path, records, st.session_state.original_data)
+                st.toast(f"画像を紐付けました: {selected_img}")
+                st.rerun()
 
-        # Render Image
-        if target_img_path and Path(target_img_path).exists():
-             _render_zoomable_image(target_img_path)
-        else:
-             st.info("画像が選択されていません")
+            # Render Image
+            if target_img_path and Path(target_img_path).exists():
+                 _render_zoomable_image(target_img_path)
+            else:
+                 st.info("画像が選択されていません")
 
     with col_form:
         st.subheader("📝 編集フォーム")
