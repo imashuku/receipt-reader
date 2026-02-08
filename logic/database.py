@@ -30,15 +30,19 @@ def _get_secret(key: str, default: str = "") -> str:
     
     return default
 
-# Turso接続設定
-TURSO_DATABASE_URL = _get_secret("TURSO_DATABASE_URL")
-TURSO_AUTH_TOKEN = _get_secret("TURSO_AUTH_TOKEN")
-
-# libsql:// を https:// に変換
-if TURSO_DATABASE_URL.startswith("libsql://"):
-    TURSO_HTTP_URL = TURSO_DATABASE_URL.replace("libsql://", "https://")
-else:
-    TURSO_HTTP_URL = TURSO_DATABASE_URL
+# Turso接続設定を取得する関数（遅延評価）
+def _get_turso_config():
+    """Turso設定を取得（毎回呼び出し時に評価）"""
+    db_url = _get_secret("TURSO_DATABASE_URL")
+    auth_token = _get_secret("TURSO_AUTH_TOKEN")
+    
+    # libsql:// を https:// に変換
+    if db_url and db_url.startswith("libsql://"):
+        http_url = db_url.replace("libsql://", "https://")
+    else:
+        http_url = db_url or ""
+    
+    return http_url, auth_token
 
 
 def execute_sql(sql: str, args: list = None) -> dict:
@@ -52,12 +56,14 @@ def execute_sql(sql: str, args: list = None) -> dict:
     Returns:
         {"columns": [...], "rows": [...]}
     """
-    if not TURSO_HTTP_URL or not TURSO_AUTH_TOKEN:
-        raise ValueError("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set in .env")
+    http_url, auth_token = _get_turso_config()
     
-    url = f"{TURSO_HTTP_URL}/v2/pipeline"
+    if not http_url or not auth_token:
+        raise ValueError("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set in st.secrets or .env")
+    
+    url = f"{http_url}/v2/pipeline"
     headers = {
-        "Authorization": f"Bearer {TURSO_AUTH_TOKEN}",
+        "Authorization": f"Bearer {auth_token}",
         "Content-Type": "application/json"
     }
     
