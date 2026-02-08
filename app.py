@@ -50,6 +50,16 @@ from dotenv import load_dotenv
 
 # Cloud backend support
 load_dotenv()
+
+# Streamlit Cloud対応: st.secretsの値をos.environに転写
+# gemini_client.py等がos.getenv()で読むため必要
+try:
+    for key in st.secrets:
+        if isinstance(st.secrets[key], str) and key not in os.environ:
+            os.environ[key] = st.secrets[key]
+except Exception:
+    pass  # ローカル実行時はst.secretsがないのでスキップ
+
 USE_CLOUD_BACKEND = os.environ.get("USE_CLOUD_BACKEND", "false").lower() == "true"
 
 if USE_CLOUD_BACKEND:
