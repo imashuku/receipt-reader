@@ -23,28 +23,19 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 # Streamlit Cloudではst.rerun()時にモジュールキャッシュが壊れることがある
-# インポート前に壊れたキャッシュをクリア
-_broken = [k for k in sys.modules if k.startswith("logic") and not hasattr(sys.modules[k], '__file__')]
-for k in _broken:
-    del sys.modules[k]
+# 毎回logicモジュールのキャッシュを全クリアしてからインポート
+for _k in [k for k in sys.modules if k.startswith("logic")]:
+    del sys.modules[_k]
 
 try:
     from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
     from logic.exporter import generate_csv_data, revalidate_record
     from logic.gemini_client import analyze_receipt_image, rescan_specific_area
-except (KeyError, ImportError, ModuleNotFoundError):
-    # 全キャッシュクリアしてリトライ
-    for k in list(sys.modules.keys()):
-        if k.startswith("logic"):
-            del sys.modules[k]
-    try:
-        from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
-        from logic.exporter import generate_csv_data, revalidate_record
-        from logic.gemini_client import analyze_receipt_image, rescan_specific_area
-    except Exception as _import_err:
-        st.error(f"❌ モジュール読み込みエラー: {_import_err}")
-        st.info("ページをリロードしてください（F5 / Ctrl+R）")
-        st.stop()
+except Exception as _import_err:
+    st.error(f"❌ モジュール読み込みエラー: {_import_err}")
+    import traceback
+    st.code(traceback.format_exc(), language="text")
+    st.stop()
 import uuid
 from dotenv import load_dotenv
 
