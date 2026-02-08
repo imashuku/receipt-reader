@@ -13,4 +13,4 @@ openai>=1.0
 # Cloud Storage & Database
 boto3>=1.42
 requests>=2.30
-streamlit-javascript>=0.6.0
+streamlit-javascript
