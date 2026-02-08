@@ -1,6 +1,14 @@
-streamlit>=1.30
-google-genai>=1.0
-pandas>=2.0
+# Core
+streamlit>=1.54
 python-dotenv>=1.0
 Pillow>=10.0
 pydantic>=2.0
+pandas>=2.0
+
+# AI Providers
+google-generativeai>=0.8
+openai>=1.0
+
+# Cloud Storage & Database
+boto3>=1.42
+requests>=2.30

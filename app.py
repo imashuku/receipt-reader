@@ -19,6 +19,15 @@ import subprocess
 import socket
 import shutil
 import uuid
+from dotenv import load_dotenv
+
+# Cloud backend support
+load_dotenv()
+USE_CLOUD_BACKEND = os.environ.get("USE_CLOUD_BACKEND", "false").lower() == "true"
+
+if USE_CLOUD_BACKEND:
+    from logic import data_layer
+    from logic.storage import upload_image_bytes, get_presigned_url
 
 # ─────────────────────────────────────────────
 # 定数
@@ -68,7 +77,25 @@ def _get_current_session_dir():
     return None
 
 def _find_sessions() -> list[dict]:
-    """output/ 配下の summary.json を探索し、セッション一覧を返す"""
+    """output/ 配下の summary.json を探索し、セッション一覧を返す（クラウドモード対応）"""
+    if USE_CLOUD_BACKEND:
+        # クラウドモード: Turso DBからセッション一覧を取得
+        db_sessions = data_layer.list_sessions()
+        sessions = []
+        for s in db_sessions:
+            sessions.append({
+                "dir": s.get("id", ""),
+                "file": "",
+                "total": 0,  # TODO: レシート数を取得
+                "valid": 0,
+                "invalid": 0,
+                "path": s.get("id", ""),  # クラウドではセッションIDをパスとして使用
+                "timestamp": s.get("created_at", ""),
+                "is_cloud": True,
+            })
+        return sessions
+    
+    # ローカルモード: ファイルベース
     sessions = []
     # タイムスタンプ順 (新しい順) にソートしたいが、フォルダ名がタイムスタンプとは限らない (以前の legacy フォルダなど)
     # glob して、フォルダ名でソート(降順)
@@ -90,6 +117,7 @@ def _find_sessions() -> list[dict]:
                 "invalid": data.get("invalid_count", 0),
                 "path": str(summary_path),
                 "timestamp": data.get("timestamp", ""),
+                "is_cloud": False,
             })
         except Exception:
             pass
@@ -97,7 +125,46 @@ def _find_sessions() -> list[dict]:
 
 
 def _load_records(summary_path: str) -> tuple[list[ReceiptRecord], dict]:
-    """summary.json からレコードリストを読み込む"""
+    """summary.json からレコードリストを読み込む（クラウドモード対応）"""
+    
+    if USE_CLOUD_BACKEND:
+        # クラウドモード: summary_pathはセッションID
+        session_id = summary_path
+        db_receipts = data_layer.get_receipts(session_id)
+        
+        records = []
+        for r in db_receipts:
+            rec = ReceiptRecord(
+                date=r.get("payment_date", ""),
+                vendor=r.get("payee", ""),
+                subject="",
+                total_amount=r.get("total_amount", 0),
+                invoice_no_norm=r.get("invoice_number", ""),
+                invoice_candidate=",".join(r.get("invoice_candidates", [])),
+                qualified_flag="○" if r.get("invoice_number", "") else "",
+                tax_rate_detected=TaxRate(r.get("tax_rate", "unknown")),
+                payment_method=PaymentMethod(r.get("payment_method", "unknown")),
+                category=Category(r.get("category", "unknown")),
+                needs_review=r.get("status", "valid") == "needs_review",
+                missing_fields=[],
+                region=None,
+                merge_candidates=[],
+                merge_reason="",
+                group_id="",
+                is_confirmed=r.get("is_confirmed", False),
+                backend_used="cloud",
+                is_discarded=r.get("is_discarded", False),
+                image_path=r.get("image_path", ""),  # 署名付きURL
+            )
+            # クラウド用ID保存
+            rec._cloud_id = r.get("id", "")
+            records.append(rec)
+        
+        # ダミーデータ（クラウドモードでは使わない）
+        data = {"session_id": session_id, "records": [], "is_cloud": True}
+        return records, data
+    
+    # ローカルモード: ファイルベース
     with open(summary_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -139,7 +206,37 @@ def _load_records(summary_path: str) -> tuple[list[ReceiptRecord], dict]:
 
 
 def _save_records(summary_path: str, records: list[ReceiptRecord], original_data: dict):
-    """レコードリストを summary.json に書き戻す"""
+    """レコードリストを summary.json に書き戻す（クラウドモード対応）"""
+    
+    if USE_CLOUD_BACKEND:
+        # クラウドモード: summary_pathはセッションID
+        session_id = summary_path if isinstance(summary_path, str) and not summary_path.endswith(".json") else original_data.get("session_id", "")
+        
+        for rec in records:
+            receipt_data = {
+                "payee": rec.vendor,
+                "total_amount": rec.total_amount,
+                "payment_date": rec.date,
+                "tax_rate": rec.tax_rate_detected.value,
+                "category": rec.category.value,
+                "payment_method": rec.payment_method.value,
+                "invoice_number": rec.invoice_no_norm,
+                "invoice_candidates": rec.invoice_candidate.split(",") if rec.invoice_candidate else [],
+                "image_path": rec.image_path,
+                "status": "needs_review" if rec.needs_review else "valid",
+                "is_confirmed": rec.is_confirmed,
+                "is_discarded": rec.is_discarded,
+            }
+            
+            # 既存レコードの更新 or 新規作成
+            if hasattr(rec, "_cloud_id") and rec._cloud_id:
+                receipt_data["id"] = rec._cloud_id
+                data_layer.update_receipt(rec._cloud_id, receipt_data)
+            else:
+                data_layer.save_receipt(session_id, receipt_data)
+        return
+    
+    # ローカルモード: ファイルベース
     serialized = []
     valid_count = 0
     invalid_count = 0
@@ -209,23 +306,48 @@ def _render_zoomable_image(img_path: str):
     - ドラッグ: パン（拡大中に画像を移動）
     - ダブルクリック: リセット（全体表示に戻す）
     - 拡大状態はマウスを離しても維持される
+    - クラウドURL（https://）にも対応
     """
-    with open(img_path, "rb") as f:
-        img_b64 = base64.b64encode(f.read()).decode()
-
-    ext = Path(img_path).suffix.lower().lstrip(".")
-    mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-            "webp": "image/webp"}.get(ext, "image/png")
-    data_url = f"data:{mime};base64,{img_b64}"
-
-    # 画像の縦横比に応じて表示高さを計算
     from PIL import Image as PILImage
-    try:
-        with PILImage.open(img_path) as pil_img:
-            w, h = pil_img.size
-            display_h = min(int(600 * h / w), 760)
-    except Exception:
-        display_h = 650
+    import io
+    
+    # URLの場合はrequestsで取得、ローカルファイルの場合は直接読み込み
+    if img_path.startswith("http://") or img_path.startswith("https://"):
+        import requests
+        try:
+            response = requests.get(img_path, timeout=10)
+            response.raise_for_status()
+            img_data = response.content
+            img_b64 = base64.b64encode(img_data).decode()
+            
+            # MIMEタイプをContent-Typeから取得
+            content_type = response.headers.get("Content-Type", "image/png")
+            mime = content_type.split(";")[0].strip()
+            
+            # 画像サイズ取得
+            with PILImage.open(io.BytesIO(img_data)) as pil_img:
+                w, h = pil_img.size
+                display_h = min(int(600 * h / w), 760)
+        except Exception as e:
+            st.error(f"画像の読み込みに失敗しました: {e}")
+            return
+    else:
+        # ローカルファイル
+        with open(img_path, "rb") as f:
+            img_b64 = base64.b64encode(f.read()).decode()
+
+        ext = Path(img_path).suffix.lower().lstrip(".")
+        mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "webp": "image/webp"}.get(ext, "image/png")
+        
+        try:
+            with PILImage.open(img_path) as pil_img:
+                w, h = pil_img.size
+                display_h = min(int(600 * h / w), 760)
+        except Exception:
+            display_h = 650
+    
+    data_url = f"data:{mime};base64,{img_b64}"
 
     html = f"""
     <style>
@@ -668,11 +790,17 @@ if inbox_files:
                     processed_count = 0
                     
                     # Session output setup
-                    session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    out_dir = BASE_OUTPUT_DIR / session_id
-                    out_dir.mkdir(parents=True, exist_ok=True)
+                    if USE_CLOUD_BACKEND:
+                        # クラウドモード: DBにセッション作成
+                        session_id = data_layer.create_session()
+                        status_container.write(f"☁️ クラウドセッション作成: {session_id[:8]}...")
+                    else:
+                        # ローカルモード: フォルダ作成
+                        session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        out_dir = BASE_OUTPUT_DIR / session_id
+                        out_dir.mkdir(parents=True, exist_ok=True)
                     
-                    # Prepare done directory
+                    # Prepare done directory (ローカルモード用、クラウドでも使う)
                     done_dir = INPUT_DIR.parent / "done"
                     done_dir.mkdir(parents=True, exist_ok=True)
 
@@ -688,28 +816,41 @@ if inbox_files:
                         # Defaulting to False as requested for stability.
                         recs = analyze_receipt_image(str(img_path), use_split_scan=False)
                         
-                        # Move to done
-                        try:
-                            import shutil
-                            new_path = done_dir / filename
-                            shutil.move(str(img_path), str(new_path))
-                            
-                            # CRITICAL: Update path in records to point to new location
-                            # AnalysisResult acts as a list, so iterating it yields ReceiptRecord objects.
-                            # We must ensure we are modifying the objects that will be extended into all_new_records.
-                            for r in recs:
-                                # Store ONLY the filename or relative path if possible, but absolute path is safer for now?
-                                # Actually, storing just the filename is better if we use the "candidates" logic in edit view.
-                                # But let's store the filename for portability, or the relative path from project root.
-                                # Let's store the FULL PATH for now to be safe, as that's what the Edit View logic expects (and then extracts filename from).
-                                r.image_path = str(new_path)
+                        if USE_CLOUD_BACKEND:
+                            # クラウドモード: 画像をR2にアップロード
+                            try:
+                                with open(img_path, "rb") as f:
+                                    img_data = f.read()
+                                object_key = upload_image_bytes(img_data, filename)
+                                image_url = get_presigned_url(object_key)
                                 
-                        except Exception as mv_err:
-                            st.warning(f"Failed to move {filename}: {mv_err}")
-                            # If move failed, keep original path
-                            for r in recs:
-                                if not r.image_path:
+                                for r in recs:
+                                    r.image_path = image_url
+                                    r._cloud_image_key = object_key  # R2オブジェクトキーを保存
+                                
+                                # Inboxから削除（R2にアップロード済み）
+                                img_path.unlink()
+                                
+                            except Exception as upload_err:
+                                st.warning(f"画像アップロード失敗 {filename}: {upload_err}")
+                                for r in recs:
                                     r.image_path = str(img_path)
+                        else:
+                            # ローカルモード: Move to done
+                            try:
+                                import shutil
+                                new_path = done_dir / filename
+                                shutil.move(str(img_path), str(new_path))
+                                
+                                # CRITICAL: Update path in records to point to new location
+                                for r in recs:
+                                    r.image_path = str(new_path)
+                                    
+                            except Exception as mv_err:
+                                st.warning(f"Failed to move {filename}: {mv_err}")
+                                for r in recs:
+                                    if not r.image_path:
+                                        r.image_path = str(img_path)
                         
                         all_new_records.extend(recs)
                         
@@ -719,22 +860,30 @@ if inbox_files:
                     status_container.write(f"✅ 解析完了: 計 {len(all_new_records)} 件のレシートを抽出しました")
 
                     # 保存 (Summary)
-                    dummy_data = {
-                        "timestamp": datetime.now().isoformat(),
-                        "total_receipts": len(all_new_records),
-                        "valid_count": 0,
-                        "invalid_count": 0,
-                        "records": [],
-                    }
-                    summary_path = out_dir / "summary.json"
-                    _save_records(str(summary_path), all_new_records, dummy_data)
+                    if USE_CLOUD_BACKEND:
+                        # クラウドモード: DBに保存
+                        dummy_data = {"session_id": session_id, "is_cloud": True}
+                        _save_records(session_id, all_new_records, dummy_data)
+                        summary_path = session_id  # クラウドではセッションIDを使用
+                    else:
+                        # ローカルモード: ファイル保存
+                        dummy_data = {
+                            "timestamp": datetime.now().isoformat(),
+                            "total_receipts": len(all_new_records),
+                            "valid_count": 0,
+                            "invalid_count": 0,
+                            "records": [],
+                        }
+                        summary_path = out_dir / "summary.json"
+                        _save_records(str(summary_path), all_new_records, dummy_data)
+                        summary_path = str(summary_path)
                     
                     status_container.update(label="完了! 編集画面へ移動します", state="complete", expanded=False)
                     
                     # 状態更新
                     st.session_state.records = all_new_records
                     st.session_state.original_data = dummy_data
-                    st.session_state.summary_path = str(summary_path)
+                    st.session_state.summary_path = summary_path
                     
                     if all_new_records:
                         st.session_state.editing_idx = 0
