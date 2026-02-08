@@ -16,40 +16,35 @@ from datetime import datetime
 import subprocess
 import socket
 import shutil
-import importlib
 
 # Streamlit Cloud対応: sys.pathにプロジェクトルートを追加
 _project_root = str(Path(__file__).resolve().parent)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-# Streamlit Cloudではモジュールキャッシュが壊れることがある
-# KeyErrorが発生した場合はキャッシュをクリアしてリトライ
-def _safe_import():
-    """logicモジュールを安全にインポート"""
+# Streamlit Cloudではst.rerun()時にモジュールキャッシュが壊れることがある
+# インポート前に壊れたキャッシュをクリア
+_broken = [k for k in sys.modules if k.startswith("logic") and not hasattr(sys.modules[k], '__file__')]
+for k in _broken:
+    del sys.modules[k]
+
+try:
+    from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
+    from logic.exporter import generate_csv_data, revalidate_record
+    from logic.gemini_client import analyze_receipt_image, rescan_specific_area
+except (KeyError, ImportError, ModuleNotFoundError):
+    # 全キャッシュクリアしてリトライ
+    for k in list(sys.modules.keys()):
+        if k.startswith("logic"):
+            del sys.modules[k]
     try:
         from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
         from logic.exporter import generate_csv_data, revalidate_record
         from logic.gemini_client import analyze_receipt_image, rescan_specific_area
-        return True
-    except (KeyError, ModuleNotFoundError) as e:
-        # モジュールキャッシュをクリアしてリトライ
-        for key in list(sys.modules.keys()):
-            if key.startswith("logic"):
-                del sys.modules[key]
-        try:
-            from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
-            from logic.exporter import generate_csv_data, revalidate_record
-            from logic.gemini_client import analyze_receipt_image, rescan_specific_area
-            return True
-        except Exception as e2:
-            st.error(f"❌ モジュール読み込みエラー: {e2}")
-            return False
-
-_safe_import()
-from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
-from logic.exporter import generate_csv_data, revalidate_record
-from logic.gemini_client import analyze_receipt_image, rescan_specific_area
+    except Exception as _import_err:
+        st.error(f"❌ モジュール読み込みエラー: {_import_err}")
+        st.info("ページをリロードしてください（F5 / Ctrl+R）")
+        st.stop()
 import uuid
 from dotenv import load_dotenv
 
