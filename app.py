@@ -71,8 +71,24 @@ def _direct_load(name: str, filepath: str, is_package: bool = False):
     if spec is None:
         raise ImportError(f"モジュールが見つかりません: {name} ({filepath})")
     module = importlib.util.module_from_spec(spec)
+    
+    # 相対インポート対応: __package__ を明示設定
+    if is_package:
+        module.__package__ = name
+        module.__path__ = [str(_logic_dir)]
+    else:
+        # サブモジュールの場合: 親パッケージ名を設定
+        module.__package__ = name.rpartition('.')[0] or name
+    
     sys.modules[name] = module
     spec.loader.exec_module(module)
+    
+    # サブモジュールを親パッケージの属性に登録（相対インポートで参照可能にする）
+    parent_name = name.rpartition('.')[0]
+    if parent_name and parent_name in sys.modules:
+        attr_name = name.rpartition('.')[2]
+        setattr(sys.modules[parent_name], attr_name, module)
+    
     return module
 
 try:
