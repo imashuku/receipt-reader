@@ -16,23 +16,26 @@ load_dotenv()
 # Cloud backend flag
 USE_CLOUD_BACKEND = os.getenv("USE_CLOUD_BACKEND", "false").lower() == "true"
 
-if USE_CLOUD_BACKEND:
-    from logic.database import (
-        create_session as db_create_session,
-        list_sessions as db_list_sessions,
-        delete_session as db_delete_session,
-        save_receipt as db_save_receipt,
-        get_receipts_by_session as db_get_receipts,
-        update_receipt as db_update_receipt,
-        soft_delete_receipt as db_soft_delete,
-        restore_receipt as db_restore,
-        get_trashed_receipts as db_get_trashed,
-    )
-    from logic.storage import (
-        upload_image_bytes,
-        get_presigned_url,
-        delete_image,
-    )
+# 遅延インポート: database / storage はモジュールレベルでインポートしない
+# 関数呼び出し時に初めてインポートすることで、インポート連鎖エラーを防止
+_db = None
+_storage = None
+
+def _get_db():
+    """database モジュールを遅延インポート"""
+    global _db
+    if _db is None:
+        from logic import database as _db_mod
+        _db = _db_mod
+    return _db
+
+def _get_storage():
+    """storage モジュールを遅延インポート"""
+    global _storage
+    if _storage is None:
+        from logic import storage as _storage_mod
+        _storage = _storage_mod
+    return _storage
 
 
 # ─────────────────────────────────────────────
@@ -81,7 +84,7 @@ class CloudReceipt:
 def create_session(name: Optional[str] = None) -> str:
     """新しいセッションを作成"""
     if USE_CLOUD_BACKEND:
-        return db_create_session(name)
+        return _get_db().create_session(name)
     else:
         # Local: フォルダ作成
         session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -93,7 +96,7 @@ def create_session(name: Optional[str] = None) -> str:
 def list_sessions() -> list[dict]:
     """セッション一覧を取得"""
     if USE_CLOUD_BACKEND:
-        return db_list_sessions()
+        return _get_db().list_sessions()
     else:
         # Local: 既存の _find_sessions と同等
         import json
@@ -126,7 +129,7 @@ def list_sessions() -> list[dict]:
 def delete_session(session_id: str):
     """セッションを削除"""
     if USE_CLOUD_BACKEND:
-        db_delete_session(session_id)
+        _get_db().delete_session(session_id)
     else:
         import shutil
         session_dir = Path("output") / session_id
@@ -142,12 +145,12 @@ def save_receipt(session_id: str, receipt: dict, image_data: Optional[bytes] = N
     if USE_CLOUD_BACKEND:
         # 画像をR2にアップロード
         if image_data:
-            object_key = upload_image_bytes(image_data, filename)
+            object_key = _get_storage().upload_image_bytes(image_data, filename)
             receipt["image_url"] = object_key
             # 署名付きURLを取得して表示用に保存
-            receipt["image_path"] = get_presigned_url(object_key)
+            receipt["image_path"] = _get_storage().get_presigned_url(object_key)
         
-        return db_save_receipt(session_id, receipt)
+        return _get_db().save_receipt(session_id, receipt)
     else:
         # Local: summary.json に追加
         raise NotImplementedError("Local save_receipt not implemented in this layer")
@@ -156,11 +159,11 @@ def save_receipt(session_id: str, receipt: dict, image_data: Optional[bytes] = N
 def get_receipts(session_id: str) -> list[dict]:
     """セッションのレシートを取得"""
     if USE_CLOUD_BACKEND:
-        receipts = db_get_receipts(session_id)
+        receipts = _get_db().get_receipts_by_session(session_id)
         # 署名付きURLを更新（期限切れ対策）
         for r in receipts:
             if r.get("image_url"):
-                r["image_path"] = get_presigned_url(r["image_url"])
+                r["image_path"] = _get_storage().get_presigned_url(r["image_url"])
         return receipts
     else:
         raise NotImplementedError("Use _load_records for local mode")
@@ -169,7 +172,7 @@ def get_receipts(session_id: str) -> list[dict]:
 def update_receipt(receipt_id: str, updates: dict):
     """レシートを更新"""
     if USE_CLOUD_BACKEND:
-        db_update_receipt(receipt_id, updates)
+        _get_db().update_receipt(receipt_id, updates)
     else:
         raise NotImplementedError("Use _save_records for local mode")
 
@@ -177,7 +180,7 @@ def update_receipt(receipt_id: str, updates: dict):
 def soft_delete_receipt(receipt_id: str):
     """レシートをソフト削除"""
     if USE_CLOUD_BACKEND:
-        db_soft_delete(receipt_id)
+        _get_db().soft_delete_receipt(receipt_id)
     else:
         raise NotImplementedError("Use _save_records for local mode")
 
@@ -185,7 +188,7 @@ def soft_delete_receipt(receipt_id: str):
 def restore_receipt(receipt_id: str):
     """レシートを復元"""
     if USE_CLOUD_BACKEND:
-        db_restore(receipt_id)
+        _get_db().restore_receipt(receipt_id)
     else:
         raise NotImplementedError("Use _save_records for local mode")
 
@@ -193,7 +196,7 @@ def restore_receipt(receipt_id: str):
 def get_trashed_receipts(session_id: str) -> list[dict]:
     """ゴミ箱のレシートを取得"""
     if USE_CLOUD_BACKEND:
-        return db_get_trashed(session_id)
+        return _get_db().get_trashed_receipts(session_id)
     else:
         raise NotImplementedError("Use _load_records for local mode")
 
@@ -206,8 +209,8 @@ def upload_image(image_data: bytes, filename: str) -> tuple[str, str]:
     画像をアップロードし、(object_key, display_url) を返す
     """
     if USE_CLOUD_BACKEND:
-        object_key = upload_image_bytes(image_data, filename)
-        display_url = get_presigned_url(object_key)
+        object_key = _get_storage().upload_image_bytes(image_data, filename)
+        display_url = _get_storage().get_presigned_url(object_key)
         return object_key, display_url
     else:
         raise NotImplementedError("Local image upload not implemented in this layer")
@@ -216,7 +219,7 @@ def upload_image(image_data: bytes, filename: str) -> tuple[str, str]:
 def get_image_url(object_key: str) -> str:
     """画像の表示用URLを取得"""
     if USE_CLOUD_BACKEND:
-        return get_presigned_url(object_key)
+        return _get_storage().get_presigned_url(object_key)
     else:
         # Local: ファイルパスをそのまま返す
         return object_key

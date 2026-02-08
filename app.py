@@ -3,6 +3,9 @@
 - summary.json を読み書きしてレシートデータを編集
 - valid/invalid の再判定、CSV出力
 """
+# ─────────────────────────────────────────────
+# Step 1: 標準ライブラリ + Streamlit
+# ─────────────────────────────────────────────
 import streamlit as st
 import streamlit.components.v1 as components
 import json
@@ -10,40 +13,28 @@ import os
 import sys
 import base64
 import glob
+import uuid
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
 import subprocess
 import socket
 import shutil
+from dotenv import load_dotenv
 
 # Streamlit Cloud対応: sys.pathにプロジェクトルートを追加
 _project_root = str(Path(__file__).resolve().parent)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-# Streamlit Cloudではst.rerun()時にモジュールキャッシュが壊れることがある
-# 毎回logicモジュールのキャッシュを全クリアしてからインポート
-for _k in [k for k in sys.modules if k.startswith("logic")]:
-    del sys.modules[_k]
-
-try:
-    from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
-    from logic.exporter import generate_csv_data, revalidate_record
-    from logic.gemini_client import analyze_receipt_image, rescan_specific_area
-except Exception as _import_err:
-    st.error(f"❌ モジュール読み込みエラー: {_import_err}")
-    import traceback
-    st.code(traceback.format_exc(), language="text")
-    st.stop()
-import uuid
-from dotenv import load_dotenv
-
-# Cloud backend support
+# ─────────────────────────────────────────────
+# Step 2: 環境変数を最初にセットアップ
+#   load_dotenv() → st.secrets転写 → 全os.getenv()が使える状態にする
+# ─────────────────────────────────────────────
 load_dotenv()
 
 # Streamlit Cloud対応: st.secretsの値をos.environに転写
-# gemini_client.py等がos.getenv()で読むため必要
+# logic配下のモジュールがos.getenv()で読むため、インポート前にセットする
 try:
     for key in st.secrets:
         if isinstance(st.secrets[key], str) and key not in os.environ:
@@ -53,6 +44,20 @@ except Exception:
 
 USE_CLOUD_BACKEND = os.environ.get("USE_CLOUD_BACKEND", "false").lower() == "true"
 
+# ─────────────────────────────────────────────
+# Step 3: logicモジュールのインポート（環境変数セットアップ済み）
+# ─────────────────────────────────────────────
+try:
+    from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
+    from logic.exporter import generate_csv_data, revalidate_record
+    from logic.gemini_client import analyze_receipt_image, rescan_specific_area
+except Exception as _import_err:
+    st.error(f"❌ コアモジュール読み込みエラー: {_import_err}")
+    import traceback
+    st.code(traceback.format_exc(), language="text")
+    st.stop()
+
+# Step 4: クラウドバックエンドモジュール（オプション）
 if USE_CLOUD_BACKEND:
     try:
         from logic import data_layer
