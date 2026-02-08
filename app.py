@@ -46,38 +46,51 @@ USE_CLOUD_BACKEND = os.environ.get("USE_CLOUD_BACKEND", "false").lower() == "tru
 
 # ─────────────────────────────────────────────
 # Step 3: logicモジュールのインポート（環境変数セットアップ済み）
-#   Streamlit Cloudでは稀にPythonのインポートキャッシュが壊れKeyErrorが出る。
-#   事前クリアは逆にKeyErrorの原因になるため「まず試す → 失敗時のみリトライ」方式。
+#   Streamlit CloudではPython標準のimport文がKeyErrorを起こすため、
+#   importlib.util.spec_from_file_location で直接ファイルからロードする。
+#   これにより _find_and_load → _load_unlocked のKeyErrorを完全に回避。
 # ─────────────────────────────────────────────
 import importlib
+import importlib.util
 
-def _import_logic_modules():
-    """logicモジュールを安全にインポート"""
-    from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
-    from logic.exporter import generate_csv_data, revalidate_record
-    from logic.gemini_client import analyze_receipt_image, rescan_specific_area
-    return ReceiptRecord, TaxRate, PaymentMethod, Category, generate_csv_data, revalidate_record, analyze_receipt_image, rescan_specific_area
+_logic_dir = Path(__file__).resolve().parent / "logic"
+
+def _direct_load(name: str, filepath: str, is_package: bool = False):
+    """Python標準importをバイパスしてファイルから直接モジュールをロード"""
+    # 既にロード済みなら再利用
+    if name in sys.modules:
+        mod = sys.modules[name]
+        if hasattr(mod, '__spec__') and mod.__spec__ is not None:
+            return mod
+
+    kwargs = {}
+    if is_package:
+        kwargs["submodule_search_locations"] = [str(_logic_dir)]
+    
+    spec = importlib.util.spec_from_file_location(name, filepath, **kwargs)
+    if spec is None:
+        raise ImportError(f"モジュールが見つかりません: {name} ({filepath})")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 try:
-    # 通常インポート（rerun時はキャッシュ済みモジュールをそのまま使う）
-    (ReceiptRecord, TaxRate, PaymentMethod, Category,
-     generate_csv_data, revalidate_record,
-     analyze_receipt_image, rescan_specific_area) = _import_logic_modules()
-except (KeyError, ImportError):
-    # キャッシュ破損時のみクリア＆リトライ
-    importlib.invalidate_caches()
-    for _k in list(sys.modules.keys()):
-        if _k.startswith("logic"):
-            del sys.modules[_k]
-    try:
-        (ReceiptRecord, TaxRate, PaymentMethod, Category,
-         generate_csv_data, revalidate_record,
-         analyze_receipt_image, rescan_specific_area) = _import_logic_modules()
-    except Exception as _retry_err:
-        st.error(f"❌ コアモジュール読み込みエラー（リトライ後も失敗）: {_retry_err}")
-        import traceback
-        st.code(traceback.format_exc(), language="text")
-        st.stop()
+    # パッケージ本体を先に登録（相対インポート用）
+    _direct_load("logic", str(_logic_dir / "__init__.py"), is_package=True)
+    # 依存順にロード: models → exporter → gemini_client
+    _m = _direct_load("logic.models", str(_logic_dir / "models.py"))
+    _e = _direct_load("logic.exporter", str(_logic_dir / "exporter.py"))
+    _g = _direct_load("logic.gemini_client", str(_logic_dir / "gemini_client.py"))
+
+    ReceiptRecord = _m.ReceiptRecord
+    TaxRate = _m.TaxRate
+    PaymentMethod = _m.PaymentMethod
+    Category = _m.Category
+    generate_csv_data = _e.generate_csv_data
+    revalidate_record = _e.revalidate_record
+    analyze_receipt_image = _g.analyze_receipt_image
+    rescan_specific_area = _g.rescan_specific_area
 except Exception as _import_err:
     st.error(f"❌ コアモジュール読み込みエラー: {_import_err}")
     import traceback
@@ -87,8 +100,10 @@ except Exception as _import_err:
 # Step 4: クラウドバックエンドモジュール（オプション）
 if USE_CLOUD_BACKEND:
     try:
-        from logic import data_layer
-        from logic.storage import upload_image_bytes, get_presigned_url
+        data_layer = _direct_load("logic.data_layer", str(_logic_dir / "data_layer.py"))
+        _storage = _direct_load("logic.storage", str(_logic_dir / "storage.py"))
+        upload_image_bytes = _storage.upload_image_bytes
+        get_presigned_url = _storage.get_presigned_url
     except Exception as _cloud_err:
         st.warning(f"⚠️ クラウドバックエンド初期化失敗（ローカルモードで動作）: {_cloud_err}")
         USE_CLOUD_BACKEND = False
