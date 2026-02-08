@@ -46,19 +46,38 @@ USE_CLOUD_BACKEND = os.environ.get("USE_CLOUD_BACKEND", "false").lower() == "tru
 
 # ─────────────────────────────────────────────
 # Step 3: logicモジュールのインポート（環境変数セットアップ済み）
-#   Streamlit Cloudではst.rerun()時にPythonのインポートキャッシュが壊れ、
-#   KeyError: 'logic.xxx' が発生するため、毎回キャッシュをリセットする
+#   Streamlit Cloudでは稀にPythonのインポートキャッシュが壊れKeyErrorが出る。
+#   事前クリアは逆にKeyErrorの原因になるため「まず試す → 失敗時のみリトライ」方式。
 # ─────────────────────────────────────────────
 import importlib
-importlib.invalidate_caches()
-for _k in list(sys.modules.keys()):
-    if _k.startswith("logic"):
-        del sys.modules[_k]
 
-try:
+def _import_logic_modules():
+    """logicモジュールを安全にインポート"""
     from logic.models import ReceiptRecord, TaxRate, PaymentMethod, Category
     from logic.exporter import generate_csv_data, revalidate_record
     from logic.gemini_client import analyze_receipt_image, rescan_specific_area
+    return ReceiptRecord, TaxRate, PaymentMethod, Category, generate_csv_data, revalidate_record, analyze_receipt_image, rescan_specific_area
+
+try:
+    # 通常インポート（rerun時はキャッシュ済みモジュールをそのまま使う）
+    (ReceiptRecord, TaxRate, PaymentMethod, Category,
+     generate_csv_data, revalidate_record,
+     analyze_receipt_image, rescan_specific_area) = _import_logic_modules()
+except (KeyError, ImportError):
+    # キャッシュ破損時のみクリア＆リトライ
+    importlib.invalidate_caches()
+    for _k in list(sys.modules.keys()):
+        if _k.startswith("logic"):
+            del sys.modules[_k]
+    try:
+        (ReceiptRecord, TaxRate, PaymentMethod, Category,
+         generate_csv_data, revalidate_record,
+         analyze_receipt_image, rescan_specific_area) = _import_logic_modules()
+    except Exception as _retry_err:
+        st.error(f"❌ コアモジュール読み込みエラー（リトライ後も失敗）: {_retry_err}")
+        import traceback
+        st.code(traceback.format_exc(), language="text")
+        st.stop()
 except Exception as _import_err:
     st.error(f"❌ コアモジュール読み込みエラー: {_import_err}")
     import traceback
