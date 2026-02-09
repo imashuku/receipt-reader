@@ -1,3 +1,10 @@
 [server]
 address = "0.0.0.0"
 headless = true
+
+[theme]
+primaryColor = "#4a90d9"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#fafbfc"
+textColor = "#202124"
+font = "sans serif"
